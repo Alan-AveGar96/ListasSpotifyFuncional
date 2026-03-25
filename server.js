@@ -139,6 +139,6 @@ app.get("/get-zip", (req, res) => {
 
 // 🔥 3. PUERTO DINÁMICO (Fundamental para Railway)
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor en puerto ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Servidor activo y visible en puerto ${PORT}`);
 });
