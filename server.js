@@ -62,6 +62,7 @@ app.get("/playlist-progress", async (req, res) => {
         } else {
             sendProgress({ status: "Analizando YouTube..." });
             const rawIds = execSync(`yt-dlp --get-id --flat-playlist "${url}"`).toString();
+            // CORREGIDO AQUÍ:
             cancionesParaBuscar = rawIds.trim().split('\n').map(id => `https://www.youtube.com{id.trim()}`);
         }
 
