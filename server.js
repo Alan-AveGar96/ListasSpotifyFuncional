@@ -20,11 +20,9 @@ const app = express();
 
 // 🔥 2. CORS dinámico para permitir tu WordPress
 app.use(cors({
-    origin: '*', // Permite peticiones desde cualquier dominio
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type']
+    origin: '*', // Esto permite que spot2mp3.com lea los datos de Railway sin errores
+    methods: ['GET', 'POST']
 }));
-
 const publicPath = path.resolve(__dirname);
 app.use(express.static(publicPath));
 
