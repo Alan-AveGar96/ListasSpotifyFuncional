@@ -19,7 +19,11 @@ try {
 const app = express();
 
 // 🔥 2. CORS dinámico para permitir tu WordPress
-app.use(cors()); 
+app.use(cors({
+    origin: '*', // Permite peticiones desde cualquier dominio
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+}));
 
 const publicPath = path.resolve(__dirname);
 app.use(express.static(publicPath));
