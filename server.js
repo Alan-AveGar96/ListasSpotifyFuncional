@@ -120,5 +120,5 @@ app.get("/get-zip", (req, res) => {
 // 🔥 PUERTO Y HOST OBLIGATORIO PARA RAILWAY
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor visible en puerto ${PORT}`);
+    console.log(`🚀 Servidor activo y visible en puerto ${PORT}`);
 });
