@@ -6,102 +6,89 @@ const path = require("path");
 const fs = require("fs");
 const archiver = require("archiver");
 
-// 🔥 1. Configuración de Spotify (Asegúrate de que 'node-fetch@2' esté en package.json)
+// 🔥 Configuración de Spotify (Carga segura)
 let getTracks;
 try {
     const fetch = require('node-fetch');
-    // Nota: spotify-url-info requiere fetch v2 en CommonJS
     getTracks = require('spotify-url-info')(fetch).getTracks;
 } catch (e) {
-    console.log("⚠️ Error cargando librerías de Spotify. Verifica la instalación.");
+    console.log("⚠️ Error cargando Spotify. Asegúrate de instalar: node-fetch@2 spotify-url-info");
 }
 
 const app = express();
 
-// 🔥 2. CORS dinámico para permitir tu WordPress
+// 🔥 CONFIGURACIÓN DE CORS (CRÍTICO PARA WORDPRESS)
 app.use(cors({
-    origin: '*', // Esto permite que spot2mp3.com lea los datos de Railway sin errores
-    methods: ['GET', 'POST']
+    origin: '*', 
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 const publicPath = path.resolve(__dirname);
 app.use(express.static(publicPath));
 
-// Directorio de descargas compatible con Railway (/tmp es mejor para archivos efímeros)
 const DOWNLOADS_DIR = path.join(publicPath, 'temp_downloads');
 if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR);
 
+// Ruta para la raíz
 app.get('/', (req, res) => {
-    // Si tu archivo se llama index.html en lugar de prueba.html, cámbialo aquí
-    res.sendFile(path.join(publicPath, 'index.html')); 
+    res.sendFile(path.join(publicPath, 'index.html'));
 });
 
+// 🔥 PROCESO DE DESCARGA CON PROGRESO (SSE)
 app.get("/playlist-progress", async (req, res) => {
     const url = req.query.url;
     
-    // Configuración de Server-Sent Events (SSE)
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders(); // 🔥 Importante para que los mensajes lleguen en tiempo real en la nube
+    res.flushHeaders(); 
 
-    const sendProgress = (data) => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
+    const sendProgress = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
     try {
         let cancionesParaBuscar = [];
         let esSpotify = url.includes('spotify.com');
 
         if (esSpotify) {
-            if (!getTracks) throw new Error("Librería Spotify no instalada.");
+            if (!getTracks) throw new Error("Librería Spotify no cargada.");
             sendProgress({ status: "Analizando lista de Spotify..." });
             const tracks = await getTracks(url);
-            
             cancionesParaBuscar = tracks.map(t => {
-                const nombreCancion = t.name || "Canción desconocida";
-                const nombreArtista = (t.artists && t.artists.length > 0) ? t.artists[0].name : "";
-                return `${nombreCancion} ${nombreArtista}`.trim();
+                const n = t.name || "Desconocida";
+                const a = (t.artists && t.artists.length > 0) ? t.artists[0].name : "";
+                return `${n} ${a}`.trim();
             });
         } else {
-            sendProgress({ status: "Analizando lista de YouTube..." });
-            // yt-dlp debe estar instalado en el entorno de Railway (Nixpack lo hace solo)
+            sendProgress({ status: "Analizando YouTube..." });
             const rawIds = execSync(`yt-dlp --get-id --flat-playlist "${url}"`).toString();
-            cancionesParaBuscar = rawIds.trim().split('\n').map(id => `https://www.youtube.com/watch?v=${id.trim()}`);
+            cancionesParaBuscar = rawIds.trim().split('\n').map(id => `https://www.youtube.com{id.trim()}`);
         }
 
         const total = cancionesParaBuscar.length;
-        if (total === 0) throw new Error("No se encontraron canciones.");
+        if (total === 0) throw new Error("No hay canciones.");
 
-        const folderName = `lista-${Date.now()}`;
+        const folderName = `list-${Date.now()}`;
         const folderPath = path.join(DOWNLOADS_DIR, folderName);
         fs.mkdirSync(folderPath);
 
         for (let i = 0; i < total; i++) {
-            sendProgress({ 
-                status: `Descargando ${i + 1} de ${total}: ${cancionesParaBuscar[i].substring(0, 25)}...`, 
-                current: i + 1, 
-                total: total 
-            });
+            sendProgress({ status: `Descargando ${i+1}/${total}: ${cancionesParaBuscar[i].substring(0,20)}...`, current: i+1, total });
             
-            let query = cancionesParaBuscar[i];
-            let comando = esSpotify 
-                ? `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "ytsearch1:${query}"`
-                : `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "${query}"`;
+            let q = cancionesParaBuscar[i];
+            let cmd = esSpotify 
+                ? `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "ytsearch1:${q}"`
+                : `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "${q}"`;
 
-            try {
-                execSync(comando);
-            } catch (e) {
-                console.error(`Error en: ${query}`);
-            }
+            try { execSync(cmd); } catch (e) { console.error("Fallo en canción:", q); }
         }
 
-        sendProgress({ status: "Comprimiendo archivos..." });
+        sendProgress({ status: "Comprimiendo ZIP..." });
         const zipName = `${folderName}.zip`;
         const zipPath = path.join(DOWNLOADS_DIR, zipName);
         const output = fs.createWriteStream(zipPath);
         const archive = archiver('zip', { zlib: { level: 9 } });
 
-        archive.on('error', (err) => { throw err; });
         output.on('close', () => {
             sendProgress({ status: "Completado", file: zipName });
         });
@@ -110,37 +97,27 @@ app.get("/playlist-progress", async (req, res) => {
         archive.directory(folderPath, false);
         await archive.finalize();
 
-        // Limpieza de carpeta original
-        setTimeout(() => {
-            fs.rmSync(folderPath, { recursive: true, force: true });
-        }, 1000);
+        setTimeout(() => fs.rmSync(folderPath, { recursive: true, force: true }), 2000);
 
     } catch (error) {
-        console.error("ERROR:", error.message);
         sendProgress({ status: "Error: " + error.message });
     }
 });
 
+// Ruta de descarga del ZIP
 app.get("/get-zip", (req, res) => {
-    const fileName = req.query.file;
-    const filePath = path.join(DOWNLOADS_DIR, fileName);
-    
+    const filePath = path.join(DOWNLOADS_DIR, req.query.file);
     if (fs.existsSync(filePath)) {
         res.download(filePath, (err) => {
-            if (!err) {
-                // Borrado seguro después de la descarga
-                setTimeout(() => {
-                    if(fs.existsSync(filePath)) fs.unlinkSync(filePath);
-                }, 5000);
-            }
+            if (!err) setTimeout(() => fs.unlinkSync(filePath), 5000);
         });
     } else {
         res.status(404).send("Archivo no encontrado.");
     }
 });
 
-// 🔥 3. PUERTO DINÁMICO (Fundamental para Railway)
+// 🔥 PUERTO Y HOST OBLIGATORIO PARA RAILWAY
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor activo y visible en puerto ${PORT}`);
+    console.log(`🚀 Servidor visible en puerto ${PORT}`);
 });
