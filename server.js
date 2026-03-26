@@ -6,14 +6,17 @@ const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 
+console.log("🔥 Iniciando servidor...");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
 const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0';
 
-// 🧠 Logs globales (IMPORTANTE)
+// 🧠 Logs globales (MUY IMPORTANTE)
 process.on('uncaughtException', err => {
     console.error('ERROR GLOBAL:', err);
 });
@@ -25,6 +28,17 @@ process.on('unhandledRejection', err => {
 // 📁 Carpeta temporal
 const TEMP_DIR = path.join(__dirname, 'temp_downloads');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
+
+
+// 🌐 Ruta raíz (EVITA 404)
+app.get('/', (req, res) => {
+    res.send("OK 🚀 Servidor funcionando");
+});
+
+// 🧪 Endpoint de prueba
+app.get('/test', (req, res) => {
+    res.send("Servidor funcionando OK 🚀");
+});
 
 
 // 🔍 Obtener canciones desde Spotify
@@ -52,15 +66,16 @@ async function searchYoutube(query) {
 }
 
 
-// 🎵 SIMULACIÓN de descarga (NO rompe Railway)
+// 🎵 SIMULACIÓN de descarga (para que Railway no falle)
 async function downloadAudio(query, folder) {
     const videoUrl = await searchYoutube(query);
     if (!videoUrl) return null;
 
     console.log("🎵 Encontrado:", videoUrl);
 
-    // 🔥 Simulación: crea archivo falso
-    const fakeFile = path.join(folder, `${query.replace(/[^\w\s]/gi, '')}.txt`);
+    // Crear archivo falso (simulación)
+    const safeName = query.replace(/[^\w\s]/gi, '').substring(0, 50);
+    const fakeFile = path.join(folder, `${safeName}.txt`);
     fs.writeFileSync(fakeFile, `Simulación de descarga:\n${videoUrl}`);
 
     return true;
@@ -83,12 +98,6 @@ function zipFolder(source, out) {
 }
 
 
-// 🧪 Endpoint de prueba
-app.get('/test', (req, res) => {
-    res.send("Servidor funcionando OK 🚀");
-});
-
-
 // 🚀 ENDPOINT PRINCIPAL
 app.post('/descargar', async (req, res) => {
     try {
@@ -107,7 +116,7 @@ app.post('/descargar', async (req, res) => {
         const folderPath = path.join(TEMP_DIR, folderName);
         fs.mkdirSync(folderPath);
 
-        // Descargar (simulado)
+        // Procesar canciones
         for (let i = 0; i < tracks.length; i++) {
             const track = tracks[i];
             const query = `${track.title} ${track.artists}`;
@@ -139,6 +148,6 @@ app.post('/descargar', async (req, res) => {
 
 
 // 🟢 INICIAR SERVIDOR
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor activo en puerto ${PORT}`);
+app.listen(PORT, HOST, () => {
+    console.log(`🚀 Servidor activo en http://${HOST}:${PORT}`);
 });
