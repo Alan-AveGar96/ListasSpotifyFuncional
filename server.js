@@ -38,7 +38,7 @@ async function downloadAudio(query, folder) {
     const videoUrl = await searchYoutube(query);
     if (!videoUrl) return null;
 
-    await youtubedl(url, {
+    await youtubedl(videoUrl, {
         extractAudio: true,
         audioFormat: 'mp3',
         output: `${folder}/%(title)s.%(ext)s`
