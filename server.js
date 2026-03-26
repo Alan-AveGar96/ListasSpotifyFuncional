@@ -6,119 +6,160 @@ const path = require("path");
 const fs = require("fs");
 const archiver = require("archiver");
 
-// 🔥 Configuración de Spotify (Carga segura)
+// 🔥 Spotify config
 let getTracks;
 try {
     const fetch = require('node-fetch');
     getTracks = require('spotify-url-info')(fetch).getTracks;
 } catch (e) {
-    console.log("⚠️ Error cargando Spotify. Asegúrate de instalar: node-fetch@2 spotify-url-info");
+    console.log("⚠️ Error cargando Spotify. Ejecuta: npm install spotify-url-info node-fetch@2");
 }
 
 const app = express();
+app.use(cors());
 
-// 🔥 CONFIGURACIÓN DE CORS (CRÍTICO PARA WORDPRESS)
-app.use(cors({
-    origin: '*', 
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type']
-}));
-
+// 📁 Archivos estáticos
 const publicPath = path.resolve(__dirname);
 app.use(express.static(publicPath));
 
+// 📁 Carpeta de descargas
 const DOWNLOADS_DIR = path.join(publicPath, 'temp_downloads');
 if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR);
 
-// Ruta para la raíz
+// 🌐 Ruta principal
 app.get('/', (req, res) => {
-    res.sendFile(path.join(publicPath, 'index.html'));
+    res.sendFile(path.join(publicPath, 'prueba.html'));
 });
 
-// 🔥 PROCESO DE DESCARGA CON PROGRESO (SSE)
+// 🚀 PROCESO CON PROGRESO (SSE)
 app.get("/playlist-progress", async (req, res) => {
     const url = req.query.url;
-    
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders(); 
 
-    const sendProgress = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+    const sendProgress = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
 
     try {
+        console.log("🔗 URL recibida:", url);
+
         let cancionesParaBuscar = [];
         let esSpotify = url.includes('spotify.com');
 
         if (esSpotify) {
-            if (!getTracks) throw new Error("Librería Spotify no cargada.");
-            sendProgress({ status: "Analizando lista de Spotify..." });
+            if (!getTracks) throw new Error("Librería Spotify no instalada.");
+
+            sendProgress({ status: "Analizando Spotify..." });
             const tracks = await getTracks(url);
+
             cancionesParaBuscar = tracks.map(t => {
-                const n = t.name || "Desconocida";
-                const a = (t.artists && t.artists.length > 0) ? t.artists[0].name : "";
-                return `${n} ${a}`.trim();
+                const nombre = t.name || "Desconocida";
+                const artista = (t.artists && t.artists.length > 0) ? t.artists[0].name : "";
+                return `${nombre} ${artista}`.trim();
             });
+
         } else {
             sendProgress({ status: "Analizando YouTube..." });
+
             const rawIds = execSync(`yt-dlp --get-id --flat-playlist "${url}"`).toString();
-            // CORREGIDO AQUÍ:
-            cancionesParaBuscar = rawIds.trim().split('\n').map(id => `https://www.youtube.com{id.trim()}`);
+
+            cancionesParaBuscar = rawIds
+                .trim()
+                .split('\n')
+                .map(id => `https://www.youtube.com/watch?v=${id.trim()}`);
         }
 
         const total = cancionesParaBuscar.length;
         if (total === 0) throw new Error("No hay canciones.");
 
-        const folderName = `list-${Date.now()}`;
+        const folderName = `lista-${Date.now()}`;
         const folderPath = path.join(DOWNLOADS_DIR, folderName);
         fs.mkdirSync(folderPath);
 
         for (let i = 0; i < total; i++) {
-            sendProgress({ status: `Descargando ${i+1}/${total}: ${cancionesParaBuscar[i].substring(0,20)}...`, current: i+1, total });
-            
-            let q = cancionesParaBuscar[i];
-            let cmd = esSpotify 
-                ? `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "ytsearch1:${q}"`
-                : `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "${q}"`;
+            sendProgress({
+                status: `Descargando ${i + 1}/${total}: ${cancionesParaBuscar[i].substring(0, 30)}...`,
+                current: i + 1,
+                total
+            });
 
-            try { execSync(cmd); } catch (e) { console.error("Fallo en canción:", q); }
+            let query = cancionesParaBuscar[i];
+
+            let comando = esSpotify
+                ? `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "ytsearch1:${query}"`
+                : `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "${query}"`;
+
+            try {
+                execSync(comando);
+            } catch (e) {
+                console.error("❌ Error en canción:", query);
+            }
         }
 
+        // 📦 Crear ZIP
         sendProgress({ status: "Comprimiendo ZIP..." });
+
         const zipName = `${folderName}.zip`;
         const zipPath = path.join(DOWNLOADS_DIR, zipName);
+
         const output = fs.createWriteStream(zipPath);
         const archive = archiver('zip', { zlib: { level: 9 } });
 
         output.on('close', () => {
             sendProgress({ status: "Completado", file: zipName });
+            res.end();
         });
 
         archive.pipe(output);
         archive.directory(folderPath, false);
         await archive.finalize();
 
-        setTimeout(() => fs.rmSync(folderPath, { recursive: true, force: true }), 2000);
+        // 🧹 Limpiar carpeta temporal
+        fs.rmSync(folderPath, { recursive: true, force: true });
 
     } catch (error) {
+        console.error("🔥 ERROR:", error.message);
         sendProgress({ status: "Error: " + error.message });
+        res.end();
     }
 });
 
-// Ruta de descarga del ZIP
+// 📥 Descargar ZIP
 app.get("/get-zip", (req, res) => {
     const filePath = path.join(DOWNLOADS_DIR, req.query.file);
-    if (fs.existsSync(filePath)) {
-        res.download(filePath, (err) => {
-            if (!err) setTimeout(() => fs.unlinkSync(filePath), 5000);
-        });
-    } else {
-        res.status(404).send("Archivo no encontrado.");
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).send("Archivo no encontrado");
+    }
+
+    res.download(filePath, (err) => {
+        if (!err) {
+            setTimeout(() => {
+                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+            }, 5000);
+        }
+    });
+});
+
+// 🔍 Búsqueda (opcional)
+app.get("/search", async (req, res) => {
+    try {
+        const result = await yts(req.query.q || "");
+        res.json(result.videos.slice(0, 5));
+    } catch {
+        res.status(500).json({ error: "Error en búsqueda" });
     }
 });
 
-// 🔥 PUERTO Y HOST OBLIGATORIO PARA RAILWAY
+// 🔥 IMPORTANTE: Compatible con Railway + Local
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor activo y visible en puerto ${PORT}`);
+    console.log("====================================");
+    console.log(`🚀 Servidor activo en puerto ${PORT}`);
+    console.log(`🌐 http://localhost:${PORT}`);
+    console.log("====================================");
 });

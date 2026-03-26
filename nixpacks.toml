@@ -1,5 +1,2 @@
-[build]
-builder = "nixpacks"
-
-[setup]
-pkgs = ["python3", "ffmpeg", "yt-dlp"]
+[phases.setup]
+nixPkgs = ["python3", "ffmpeg", "yt-dlp"]
