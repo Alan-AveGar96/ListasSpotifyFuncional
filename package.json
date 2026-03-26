@@ -4,7 +4,7 @@
   "description": "Descargador de listas de Spotify y YouTube para WordPress",
   "main": "server.js",
   "scripts": {
-    "start": "pip3 install yt-dlp && node server.js",
+    "start": "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod +x yt-dlp && mv yt-dlp /usr/local/bin/yt-dlp && node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
