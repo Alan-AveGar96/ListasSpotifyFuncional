@@ -1,165 +1,120 @@
-const express = require("express");
-const yts = require("yt-search");
-const { execSync } = require("child_process");
-const cors = require("cors");
-const path = require("path");
-const fs = require("fs");
-const archiver = require("archiver");
-
-// 🔥 Spotify config
-let getTracks;
-try {
-    const fetch = require('node-fetch');
-    getTracks = require('spotify-url-info')(fetch).getTracks;
-} catch (e) {
-    console.log("⚠️ Error cargando Spotify. Ejecuta: npm install spotify-url-info node-fetch@2");
-}
+const express = require('express');
+const cors = require('cors');
+const fetch = require('node-fetch');
+const ytSearch = require('yt-search');
+const ytDlp = require('yt-dlp-exec');
+const fs = require('fs');
+const path = require('path');
+const archiver = require('archiver');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
+app.use(express.static(__dirname)); // sirve index.html
 
-// 📁 Archivos estáticos
-const publicPath = path.resolve(__dirname);
-app.use(express.static(publicPath));
+const PORT = process.env.PORT || 3000;
 
-// 📁 Carpeta de descargas
-const DOWNLOADS_DIR = path.join(publicPath, 'temp_downloads');
-if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR);
+// Carpeta temporal
+const TEMP_DIR = path.join(__dirname, 'temp_downloads');
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
 
-// 🌐 Ruta principal
-app.get('/', (req, res) => {
-    res.sendFile(path.join(publicPath, 'prueba.html'));
-});
 
-// 🚀 PROCESO CON PROGRESO (SSE)
-app.get("/playlist-progress", async (req, res) => {
-    const url = req.query.url;
+// 🔍 Obtener canciones desde Spotify
+async function getTracksFromSpotify(url) {
+    const res = await fetch(`https://api.spotifydown.com/metadata/playlist?link=${url}`);
+    const data = await res.json();
+    return data.tracks || [];
+}
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
 
-    const sendProgress = (data) => {
-        res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
+// 🔎 Buscar en YouTube
+async function searchYoutube(query) {
+    const result = await ytSearch(query);
+    return result.videos.length > 0 ? result.videos[0].url : null;
+}
 
+
+// 🎵 Descargar audio con yt-dlp-exec
+async function downloadAudio(query, folder) {
+    const videoUrl = await searchYoutube(query);
+    if (!videoUrl) return null;
+
+    await ytDlp(videoUrl, {
+        extractAudio: true,
+        audioFormat: 'mp3',
+        output: `${folder}/%(title)s.%(ext)s`,
+        noPlaylist: true
+    });
+
+    return true;
+}
+
+
+// 📦 Crear ZIP
+function zipFolder(source, out) {
+    return new Promise((resolve, reject) => {
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        const stream = fs.createWriteStream(out);
+
+        stream.on('close', resolve);
+        archive.on('error', reject);
+
+        archive.pipe(stream);
+        archive.directory(source, false);
+        archive.finalize();
+    });
+}
+
+
+// 🚀 ENDPOINT PRINCIPAL
+app.post('/descargar', async (req, res) => {
     try {
-        console.log("🔗 URL recibida:", url);
+        const { url } = req.body;
+        if (!url) return res.status(400).json({ error: 'URL requerida' });
 
-        let cancionesParaBuscar = [];
-        let esSpotify = url.includes('spotify.com');
+        const tracks = await getTracksFromSpotify(url);
 
-        if (esSpotify) {
-            if (!getTracks) throw new Error("Librería Spotify no instalada.");
-
-            sendProgress({ status: "Analizando Spotify..." });
-            const tracks = await getTracks(url);
-
-            cancionesParaBuscar = tracks.map(t => {
-                const nombre = t.name || "Desconocida";
-                const artista = (t.artists && t.artists.length > 0) ? t.artists[0].name : "";
-                return `${nombre} ${artista}`.trim();
-            });
-
-        } else {
-            sendProgress({ status: "Analizando YouTube..." });
-
-            const rawIds = execSync(`yt-dlp --get-id --flat-playlist "${url}"`).toString();
-
-            cancionesParaBuscar = rawIds
-                .trim()
-                .split('\n')
-                .map(id => `https://www.youtube.com/watch?v=${id.trim()}`);
+        if (!tracks.length) {
+            return res.status(400).json({ error: 'No se encontraron canciones' });
         }
 
-        const total = cancionesParaBuscar.length;
-        if (total === 0) throw new Error("No hay canciones.");
-
-        const folderName = `lista-${Date.now()}`;
-        const folderPath = path.join(DOWNLOADS_DIR, folderName);
+        const folderName = `lista_${Date.now()}`;
+        const folderPath = path.join(TEMP_DIR, folderName);
         fs.mkdirSync(folderPath);
 
-        for (let i = 0; i < total; i++) {
-            sendProgress({
-                status: `Descargando ${i + 1}/${total}: ${cancionesParaBuscar[i].substring(0, 30)}...`,
-                current: i + 1,
-                total
-            });
+        // Descargar canciones
+        for (let i = 0; i < tracks.length; i++) {
+            const track = tracks[i];
+            const query = `${track.title} ${track.artists}`;
 
-            let query = cancionesParaBuscar[i];
-
-            let comando = esSpotify
-                ? `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "ytsearch1:${query}"`
-                : `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "${query}"`;
+            console.log(`Descargando: ${query}`);
 
             try {
-                execSync(comando);
-            } catch (e) {
-                console.error("❌ Error en canción:", query);
+                await downloadAudio(query, folderPath);
+            } catch (err) {
+                console.log("Error en descarga:", err.message);
             }
         }
 
-        // 📦 Crear ZIP
-        sendProgress({ status: "Comprimiendo ZIP..." });
+        // Crear ZIP
+        const zipPath = path.join(TEMP_DIR, `${folderName}.zip`);
+        await zipFolder(folderPath, zipPath);
 
-        const zipName = `${folderName}.zip`;
-        const zipPath = path.join(DOWNLOADS_DIR, zipName);
-
-        const output = fs.createWriteStream(zipPath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        output.on('close', () => {
-            sendProgress({ status: "Completado", file: zipName });
-            res.end();
+        // Enviar archivo
+        res.download(zipPath, () => {
+            // limpiar archivos después
+            fs.rmSync(folderPath, { recursive: true, force: true });
+            fs.unlinkSync(zipPath);
         });
 
-        archive.pipe(output);
-        archive.directory(folderPath, false);
-        await archive.finalize();
-
-        // 🧹 Limpiar carpeta temporal
-        fs.rmSync(folderPath, { recursive: true, force: true });
-
     } catch (error) {
-        console.error("🔥 ERROR:", error.message);
-        sendProgress({ status: "Error: " + error.message });
-        res.end();
+        console.error(error);
+        res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
 
-// 📥 Descargar ZIP
-app.get("/get-zip", (req, res) => {
-    const filePath = path.join(DOWNLOADS_DIR, req.query.file);
 
-    if (!fs.existsSync(filePath)) {
-        return res.status(404).send("Archivo no encontrado");
-    }
-
-    res.download(filePath, (err) => {
-        if (!err) {
-            setTimeout(() => {
-                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-            }, 5000);
-        }
-    });
-});
-
-// 🔍 Búsqueda (opcional)
-app.get("/search", async (req, res) => {
-    try {
-        const result = await yts(req.query.q || "");
-        res.json(result.videos.slice(0, 5));
-    } catch {
-        res.status(500).json({ error: "Error en búsqueda" });
-    }
-});
-
-// 🔥 IMPORTANTE: Compatible con Railway + Local
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, '0.0.0.0', () => {
-    console.log("====================================");
+// 🟢 INICIAR SERVIDOR
+app.listen(PORT, () => {
     console.log(`🚀 Servidor activo en puerto ${PORT}`);
-    console.log(`🌐 http://localhost:${PORT}`);
-    console.log("====================================");
 });
