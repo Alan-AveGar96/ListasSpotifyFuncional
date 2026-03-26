@@ -2,8 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const ytSearch = require('yt-search');
-const ytDlp = require('yt-dlp-exec');
-const fs = require('fs');
+const youtubedl = require('youtube-dl-exec'); const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 
@@ -39,11 +38,10 @@ async function downloadAudio(query, folder) {
     const videoUrl = await searchYoutube(query);
     if (!videoUrl) return null;
 
-    await ytDlp(videoUrl, {
+    await youtubedl(url, {
         extractAudio: true,
         audioFormat: 'mp3',
-        output: `${folder}/%(title)s.%(ext)s`,
-        noPlaylist: true
+        output: `${folder}/%(title)s.%(ext)s`
     });
 
     return true;
