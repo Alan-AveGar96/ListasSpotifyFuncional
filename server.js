@@ -1,3 +1,5 @@
+process.env.YTDLP_PATH = "/usr/bin/yt-dlp";
+
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
@@ -11,52 +13,63 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔥 IMPORTANTE para Railway (healthcheck)
+const PORT = process.env.PORT || 3000;
+
+// 👉 Ruta base (para evitar 404 en Railway)
 app.get('/', (req, res) => {
     res.send('Servidor funcionando 🚀');
 });
-
-const PORT = process.env.PORT || 3000;
 
 // Carpeta temporal
 const TEMP_DIR = path.join(__dirname, 'temp_downloads');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
 
-
 // 🔍 Obtener canciones desde Spotify
 async function getTracksFromSpotify(url) {
-    const res = await fetch(`https://api.spotifydown.com/metadata/playlist?link=${url}`);
-    const data = await res.json();
-    return data.tracks || [];
-}
+    try {
+        const res = await fetch(`https://api.spotifydown.com/metadata/playlist?link=${url}`);
+        const data = await res.json();
 
+        if (!data || !data.tracks) {
+            console.log("Spotify API error:", data);
+            return [];
+        }
+
+        return data.tracks;
+    } catch (err) {
+        console.log("Error Spotify:", err.message);
+        return [];
+    }
+}
 
 // 🔎 Buscar en YouTube
 async function searchYoutube(query) {
-    const result = await ytSearch(query);
-    return result.videos.length > 0 ? result.videos[0].url : null;
+    try {
+        const result = await ytSearch(query);
+        return result.videos.length > 0 ? result.videos[0].url : null;
+    } catch (err) {
+        console.log("Error YouTube:", err.message);
+        return null;
+    }
 }
-
 
 // 🎵 Descargar audio
 async function downloadAudio(query, folder) {
     const videoUrl = await searchYoutube(query);
-    if (!videoUrl) return null;
+    if (!videoUrl) return false;
 
-    console.log("🎧 Descargando:", videoUrl);
-
-    await youtubedl(videoUrl, {
-        extractAudio: true,
-        audioFormat: 'mp3',
-        output: `${folder}/%(title)s.%(ext)s`,
-        noWarnings: true,
-        preferFreeFormats: true,
-        addHeader: ['referer:youtube.com', 'user-agent:googlebot']
-    });
-
-    return true;
+    try {
+        await youtubedl(videoUrl, {
+            extractAudio: true,
+            audioFormat: 'mp3',
+            output: `${folder}/%(title)s.%(ext)s`
+        });
+        return true;
+    } catch (err) {
+        console.log("Error descarga:", err.message);
+        return false;
+    }
 }
-
 
 // 📦 Crear ZIP
 function zipFolder(source, out) {
@@ -73,7 +86,6 @@ function zipFolder(source, out) {
     });
 }
 
-
 // 🚀 ENDPOINT PRINCIPAL
 app.post('/descargar', async (req, res) => {
     try {
@@ -83,7 +95,7 @@ app.post('/descargar', async (req, res) => {
             return res.status(400).json({ error: 'URL requerida' });
         }
 
-        console.log("📥 URL recibida:", url);
+        console.log("Procesando:", url);
 
         const tracks = await getTracksFromSpotify(url);
 
@@ -95,36 +107,31 @@ app.post('/descargar', async (req, res) => {
         const folderPath = path.join(TEMP_DIR, folderName);
         fs.mkdirSync(folderPath);
 
-        // ⚠️ LIMITAR para evitar crash en Railway
-        const MAX_TRACKS = 5;
-
-        for (let i = 0; i < Math.min(tracks.length, MAX_TRACKS); i++) {
+        // Descargar canciones
+        for (let i = 0; i < tracks.length; i++) {
             const track = tracks[i];
             const query = `${track.title} ${track.artists}`;
 
-            console.log(`🎵 ${i + 1}/${MAX_TRACKS}: ${query}`);
+            console.log(`Descargando: ${query}`);
 
-            try {
-                await downloadAudio(query, folderPath);
-            } catch (err) {
-                console.log("❌ Error descarga:", err.message);
-            }
+            await downloadAudio(query, folderPath);
         }
 
+        // Crear ZIP
         const zipPath = path.join(TEMP_DIR, `${folderName}.zip`);
         await zipFolder(folderPath, zipPath);
 
+        // Enviar archivo
         res.download(zipPath, () => {
             fs.rmSync(folderPath, { recursive: true, force: true });
             fs.unlinkSync(zipPath);
         });
 
     } catch (error) {
-        console.error("🔥 ERROR:", error);
+        console.error("ERROR GENERAL:", error);
         res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
-
 
 // 🟢 INICIAR SERVIDOR
 app.listen(PORT, () => {
