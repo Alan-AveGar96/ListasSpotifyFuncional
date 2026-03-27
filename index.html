@@ -51,7 +51,7 @@
 
             status.innerText = "Iniciando proceso...";
 
-            // Obtén la URL base automáticamente (ej: https://tuapp.railway.app)
+            // Obtén la URL base (funciona local y en Railway)
             const baseUrl = window.location.origin;
 
             const ev = new EventSource(`${baseUrl}/playlist-progress?url=${encodeURIComponent(url)}`);
