@@ -1,6 +1,6 @@
 const express = require("express");
 const yts = require("yt-search");
-const { execSync, exec } = require("child_process");
+const { execSync } = require("child_process");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
@@ -18,18 +18,31 @@ try {
 const app = express();
 app.use(cors());
 
-// Hace que el servidor reconozca los archivos en tu carpeta actual
+// Timeout para descargas largas (5 minutos)
+app.use((req, res, next) => {
+    res.setTimeout(300000);
+    next();
+});
+
+// Servir archivos estáticos (HTML, CSS, JS)
 const publicPath = path.resolve(__dirname);
 app.use(express.static(publicPath));
 
+// Carpeta temporal para descargas
 const DOWNLOADS_DIR = path.join(publicPath, 'temp_downloads');
 if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR);
 
-// Ruta principal para evitar el "Cannot GET /"
+// Ruta principal: sirve index.html si existe, de lo contrario prueba.html
 app.get('/', (req, res) => {
-    res.sendFile(path.join(publicPath, 'prueba.html'));
+    const indexFile = path.join(publicPath, 'index.html');
+    if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+    } else {
+        res.sendFile(path.join(publicPath, 'prueba.html'));
+    }
 });
 
+// Ruta de progreso (EventSource)
 app.get("/playlist-progress", async (req, res) => {
     const url = req.query.url;
     res.setHeader('Content-Type', 'text/event-stream');
@@ -44,11 +57,8 @@ app.get("/playlist-progress", async (req, res) => {
 
         if (esSpotify) {
             if (!getTracks) throw new Error("Librería Spotify no instalada en el servidor.");
-            
             sendProgress({ status: "Analizando lista de Spotify..." });
             const tracks = await getTracks(url);
-            
-            // MAPEO SEGURO: Evita el error 'reading 0' si no hay artista
             cancionesParaBuscar = tracks.map(t => {
                 const nombreCancion = t.name || "Canción desconocida";
                 const nombreArtista = (t.artists && t.artists.length > 0) ? t.artists[0].name : "";
@@ -68,15 +78,14 @@ app.get("/playlist-progress", async (req, res) => {
         fs.mkdirSync(folderPath);
 
         for (let i = 0; i < total; i++) {
-            sendProgress({ 
-                status: `Descargando ${i + 1} de ${total}: ${cancionesParaBuscar[i].substring(0, 30)}...`, 
-                current: i + 1, 
-                total: total 
+            sendProgress({
+                status: `Descargando ${i + 1} de ${total}: ${cancionesParaBuscar[i].substring(0, 30)}...`,
+                current: i + 1,
+                total: total
             });
-            
+
             let query = cancionesParaBuscar[i];
-            // Comando dinámico: Búsqueda para Spotify, Link directo para YouTube
-            let comando = esSpotify 
+            let comando = esSpotify
                 ? `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "ytsearch1:${query}"`
                 : `yt-dlp -x --audio-format mp3 --no-playlist -o "${folderPath}/%(title)s.%(ext)s" "${query}"`;
 
@@ -102,7 +111,7 @@ app.get("/playlist-progress", async (req, res) => {
         archive.directory(folderPath, false);
         await archive.finalize();
 
-        // Borrar carpeta temporal de MP3s después de crear el ZIP
+        // Eliminar carpeta temporal
         fs.rmSync(folderPath, { recursive: true, force: true });
 
     } catch (error) {
@@ -112,20 +121,18 @@ app.get("/playlist-progress", async (req, res) => {
     }
 });
 
-// Ruta para descargar el archivo ZIP final
+// Ruta para descargar el ZIP
 app.get("/get-zip", (req, res) => {
     const fileName = req.query.file;
     const filePath = path.join(DOWNLOADS_DIR, fileName);
-    
     res.download(filePath, (err) => {
         if (!err && fs.existsSync(filePath)) {
-            // Borrar el ZIP después de enviarlo para no llenar el disco
             fs.unlinkSync(filePath);
         }
     });
 });
 
-// Ruta de búsqueda individual (opcional)
+// Ruta de búsqueda (opcional)
 app.get("/search", async (req, res) => {
     try {
         const result = await yts(req.query.q || "");
@@ -135,10 +142,12 @@ app.get("/search", async (req, res) => {
     }
 });
 
-app.listen(3000, () => {
+// PUERTO DINÁMICO (clave para Railway)
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
     console.log("============================================");
     console.log("✅ SERVIDOR MULTIMEDIA INICIADO");
     console.log(`📂 Carpeta: ${publicPath}`);
-    console.log("🌐 URL Local: http://localhost:3000/prueba.html");
+    console.log(`🌐 URL Local: http://localhost:${PORT}/`);
     console.log("============================================");
 });
